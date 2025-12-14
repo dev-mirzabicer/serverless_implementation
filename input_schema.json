@@ -1,0 +1,260 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Diffusion-Pipe Serverless Training Input",
+  "description": "Input schema for serverless LoRA training endpoint",
+  "type": "object",
+  "required": ["model_type", "dataset"],
+  "properties": {
+    "model_type": {
+      "type": "string",
+      "enum": ["flux", "sdxl", "wan13", "wan14b_t2v", "wan14b_i2v", "qwen", "z_image_turbo"],
+      "description": "The model architecture to train a LoRA for"
+    },
+    "dataset": {
+      "type": "object",
+      "description": "Dataset configuration",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["images", "videos", "both", "precaptioned"],
+          "description": "Type of dataset. 'precaptioned' means captions already exist in the dataset"
+        },
+        "images_url": {
+          "type": "string",
+          "description": "URL to download image dataset (zip file). Required if type is 'images' or 'both'"
+        },
+        "videos_url": {
+          "type": "string",
+          "description": "URL to download video dataset (zip file). Required if type is 'videos' or 'both'"
+        },
+        "trigger_word": {
+          "type": "string",
+          "description": "Optional trigger word to prepend to all captions (e.g., 'ohwx person')"
+        },
+        "image_repeats": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Number of times to repeat image dataset per epoch"
+        },
+        "video_repeats": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "description": "Number of times to repeat video dataset per epoch"
+        }
+      }
+    },
+    "training": {
+      "type": "object",
+      "description": "Training hyperparameters. All optional with sensible defaults. Supports ANY parameter that diffusion-pipe accepts - custom parameters will be passed through to the TOML config.",
+      "properties": {
+        "epochs": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "description": "Number of training epochs"
+        },
+        "learning_rate": {
+          "type": "number",
+          "default": 2e-5,
+          "description": "Learning rate for optimizer"
+        },
+        "batch_size": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Micro batch size per GPU"
+        },
+        "gradient_accumulation_steps": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "description": "Number of gradient accumulation steps"
+        },
+        "gradient_clipping": {
+          "type": "number",
+          "default": 1.0,
+          "description": "Gradient norm clipping value"
+        },
+        "warmup_steps": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 0,
+          "description": "Number of learning rate warmup steps"
+        },
+        "lora_rank": {
+          "type": "integer",
+          "default": 32,
+          "enum": [4, 8, 16, 32, 64, 128],
+          "description": "LoRA adapter rank"
+        },
+        "lora_dtype": {
+          "type": "string",
+          "default": "bfloat16",
+          "enum": ["bfloat16", "float16", "float32"],
+          "description": "Data type for LoRA weights"
+        },
+        "save_every_n_epochs": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "description": "Save model checkpoint every N epochs"
+        },
+        "checkpoint_every_n_minutes": {
+          "type": "integer",
+          "default": 120,
+          "minimum": 1,
+          "description": "Checkpoint training state every N minutes (for resuming)"
+        },
+        "activation_checkpointing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable activation checkpointing to save VRAM (recommended)"
+        },
+        "save_dtype": {
+          "type": "string",
+          "default": "bfloat16",
+          "enum": ["bfloat16", "float16", "float32"],
+          "description": "Data type for saving the LoRA weights"
+        },
+        "video_clip_mode": {
+          "type": "string",
+          "default": "single_middle",
+          "enum": ["single_beginning", "single_middle", "multiple_overlapping"],
+          "description": "How to extract video clips for training"
+        },
+        "caching_batch_size": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Batch size for caching latents and text embeddings"
+        },
+        "eval_every_n_epochs": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "description": "Run evaluation every N epochs"
+        },
+        "eval_before_first_step": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run evaluation before the first training step"
+        },
+        "optimizer_type": {
+          "type": "string",
+          "default": "adamw_optimi",
+          "description": "Optimizer type (adamw_optimi recommended for bfloat16)"
+        },
+        "optimizer_betas": {
+          "type": "array",
+          "items": {"type": "number"},
+          "default": [0.9, 0.99],
+          "description": "Adam beta parameters"
+        },
+        "optimizer_weight_decay": {
+          "type": "number",
+          "default": 0.01,
+          "description": "Weight decay for optimizer"
+        },
+        "optimizer_eps": {
+          "type": "number",
+          "default": 1e-8,
+          "description": "Adam epsilon parameter"
+        },
+        "resolution": {
+          "type": "integer",
+          "default": 1024,
+          "enum": [512, 768, 1024],
+          "description": "Training resolution (side length of square)"
+        },
+        "frame_buckets": {
+          "type": "array",
+          "items": {"type": "integer"},
+          "default": [1, 33],
+          "description": "Frame buckets for video training. First value should always be 1 for images."
+        }
+      },
+      "additionalProperties": true
+    },
+    "api_keys": {
+      "type": "object",
+      "description": "API keys required for certain models/features",
+      "properties": {
+        "huggingface_token": {
+          "type": "string",
+          "description": "HuggingFace token. Required for Flux model."
+        },
+        "gemini_api_key": {
+          "type": "string",
+          "description": "Gemini API key. Required for video captioning."
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Output configuration for download link generation",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["auto", "huggingface", "s3", "litterbox", "transfer_sh"],
+          "default": "auto",
+          "description": "Upload method. 'huggingface' uploads raw files to HF Hub (recommended). 'auto' tries HF first (if configured), then litterbox, then transfer.sh. 's3' requires s3 config."
+        },
+        "huggingface": {
+          "type": "object",
+          "description": "HuggingFace Hub configuration. Uploads raw .safetensors files (not zipped) - ideal for LoRAs. Permanent storage.",
+          "properties": {
+            "token": {
+              "type": "string",
+              "description": "HuggingFace token with write access. Get from https://huggingface.co/settings/tokens"
+            },
+            "repo_id": {
+              "type": "string",
+              "description": "Repository ID (e.g., 'username/my-lora'). If not provided, auto-generated as 'username/diffusion-pipe-lora-{job_id}'"
+            },
+            "private": {
+              "type": "boolean",
+              "default": true,
+              "description": "Whether the repository should be private (default: true)"
+            }
+          },
+          "required": ["token"]
+        },
+        "s3": {
+          "type": "object",
+          "description": "S3-compatible storage configuration for upload. Provides 7-day presigned download URLs.",
+          "properties": {
+            "endpoint_url": {
+              "type": "string",
+              "description": "S3 endpoint URL (optional for AWS S3, required for Cloudflare R2, MinIO, etc.). Example: 'https://your-account.r2.cloudflarestorage.com'"
+            },
+            "bucket": {
+              "type": "string",
+              "description": "S3 bucket name"
+            },
+            "region": {
+              "type": "string",
+              "description": "AWS region (e.g., 'us-east-1', 'auto' for R2)"
+            },
+            "access_key": {
+              "type": "string",
+              "description": "S3 access key ID"
+            },
+            "secret_key": {
+              "type": "string",
+              "description": "S3 secret access key"
+            },
+            "key_prefix": {
+              "type": "string",
+              "default": "diffusion-pipe-outputs",
+              "description": "Prefix for object keys (like a folder path)"
+            }
+          },
+          "required": ["bucket", "access_key", "secret_key"]
+        }
+      }
+    }
+  }
+}

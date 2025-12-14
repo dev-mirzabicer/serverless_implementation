@@ -1,0 +1,19 @@
+{
+  "input": {
+    "model_type": "wan14b_t2v",
+    "dataset": {
+      "type": "precaptioned",
+      "videos_url": "https://example.com/my_videos.zip"
+    },
+    "training": {
+      "epochs": 10,
+      "learning_rate": 2e-5,
+      "lora_rank": 32,
+      "save_every_n_epochs": 5
+    },
+    "api_keys": {},
+    "output": {
+      "method": "auto"
+    }
+  }
+}
