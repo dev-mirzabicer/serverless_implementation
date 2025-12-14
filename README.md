@@ -1,170 +1,287 @@
-# Diffusion-Pipe Serverless Endpoint
+# Diffusion-Pipe Serverless: LoRA Training as an API
 
-This is a serverless version of the [diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) LoRA training framework, adapted for RunPod Serverless deployment.
+Train LoRA adapters for image and video diffusion models via a simple HTTP API. No SSH, no interactive scripts - just send a request and get your trained model.
 
-## Overview
+## What This Does
 
-This converts the interactive pod-based training workflow into a stateless API endpoint. Instead of SSHing into a pod and running an interactive script, you make an HTTP request with your training configuration and receive results when training completes.
+This project converts [diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) (an interactive LoRA training framework) into a **RunPod Serverless endpoint**. Instead of:
 
-## Supported Models
-
-- **Flux** - Requires HuggingFace token
-- **SDXL** - Stable Diffusion XL
-- **Wan 1.3B** - Wan2.1 Text-to-Video 1.3B
-- **Wan 14B T2V** - Wan2.1 Text-to-Video 14B
-- **Wan 14B I2V** - Wan2.1 Image-to-Video 14B
-- **Qwen Image** - Qwen Image model
-- **Z Image Turbo** - Z Image Turbo model
-
-## Building the Docker Image
-
-```bash
-# Navigate to the serverless implementation directory
-cd serverless_implementation
-
-# Build the image (replace YOUR_USERNAME with your Docker Hub username)
-docker build --platform linux/amd64 -t YOUR_USERNAME/diffusion-pipe-serverless:v1.0 .
-
-# Push to Docker Hub
-docker push YOUR_USERNAME/diffusion-pipe-serverless:v1.0
+```
+SSH into pod → Run script → Answer questions → Wait → Download files
 ```
 
-## API Usage
+You now do:
 
-### Request Format
+```
+Send HTTP request → Get job ID → Poll for status → Download from URL
+```
 
-POST to your endpoint URL with JSON body:
+## Features
 
+- **7 Supported Models**: Flux, SDXL, Wan 1.3B, Wan 14B T2V, Wan 14B I2V, Qwen Image, Z Image Turbo
+- **Auto-Captioning**: JoyCaption for images, Gemini for videos
+- **Direct HuggingFace Upload**: Raw `.safetensors` files, not zipped archives
+- **Progress Tracking**: JSON updates written to HuggingFace repo (survives RunPod job purging)
+- **Full Parameter Control**: Every diffusion-pipe TOML parameter is configurable via API
+- **Multiple Output Options**: HuggingFace (recommended), S3, litterbox, transfer.sh
+
+---
+
+## Quick Start
+
+### 1. Deploy the Endpoint
+
+1. Go to [RunPod Serverless Console](https://www.runpod.io/console/serverless)
+2. Click **New Endpoint**
+3. Select **Import from Docker Registry**
+4. Enter: `mirzabicer/diffusion-pipe-serverless:v1.0`
+5. Select GPU type (A100 or H100 recommended)
+6. Optionally attach a Network Volume for faster model loading
+7. Deploy and note your **Endpoint ID**
+
+### 2. Get Your API Keys
+
+- **RunPod API Key**: [RunPod Settings](https://www.runpod.io/console/user/settings)
+- **HuggingFace Token** (for output): [HuggingFace Tokens](https://huggingface.co/settings/tokens) - needs **write** access
+- **Gemini API Key** (for video captioning): [Google AI Studio](https://aistudio.google.com/app/apikey)
+
+### 3. Prepare Your Dataset
+
+Create a zip file with your training data:
+
+```
+my_dataset.zip
+├── image1.jpg
+├── image1.txt      # Caption: "a photo of ohwx person smiling"
+├── image2.png
+├── image2.txt      # Caption: "ohwx person standing outdoors"
+└── ...
+```
+
+Upload to any publicly accessible URL (litterbox, S3, etc.).
+
+### 4. Start Training
+
+```bash
+curl -X POST "https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/run" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
+  -d '{
+    "input": {
+      "model_type": "qwen",
+      "dataset": {
+        "type": "precaptioned",
+        "images_url": "https://your-storage.com/my_dataset.zip"
+      },
+      "training": {
+        "epochs": 100,
+        "lora_rank": 32,
+        "save_every_n_epochs": 20
+      },
+      "output": {
+        "method": "huggingface",
+        "huggingface": {
+          "token": "hf_YOUR_WRITE_TOKEN",
+          "repo_id": "your-username/my-lora",
+          "private": true
+        }
+      }
+    }
+  }'
+```
+
+Response:
+```json
+{"id": "abc123-def456", "status": "IN_QUEUE"}
+```
+
+### 5. Monitor Progress
+
+**Option A: Poll RunPod Status**
+```bash
+curl "https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/abc123-def456" \
+  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY"
+```
+
+**Option B: Check HuggingFace UPDATES folder**
+
+Your repo will have an `UPDATES/` folder with JSON files:
+```
+UPDATES/
+├── 0001_20241214_120000_INITIALIZED.json
+├── 0002_20241214_120030_DOWNLOADING.json
+├── 0003_20241214_120145_TRAINING.json
+└── 0004_20241214_130000_COMPLETE.json
+```
+
+### 6. Download Your LoRA
+
+When complete, the response includes:
 ```json
 {
-  "input": {
-    "model_type": "wan14b_t2v",
-    "dataset": {
-      "type": "videos",
-      "videos_url": "https://your-storage.com/my_videos.zip",
-      "trigger_word": "ohwx person"
-    },
-    "training": {
-      "epochs": 100,
-      "learning_rate": 2e-5,
-      "lora_rank": 32,
-      "save_every_n_epochs": 10
-    },
-    "api_keys": {
-      "gemini_api_key": "YOUR_GEMINI_API_KEY"
-    },
-    "output": {
-      "upload_url": "https://presigned-s3-url.com/upload"
-    }
+  "output": {
+    "download_url": "https://huggingface.co/your-username/my-lora/resolve/main/adapter_model.safetensors?download=true",
+    "repo_url": "https://huggingface.co/your-username/my-lora"
   }
 }
 ```
 
-### Input Parameters
+Just click the URL or use `wget`/`curl` to download.
 
-#### Required Fields
+---
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `model_type` | string | One of: `flux`, `sdxl`, `wan13`, `wan14b_t2v`, `wan14b_i2v`, `qwen`, `z_image_turbo` |
-| `dataset.type` | string | One of: `images`, `videos`, `both`, `precaptioned` |
+## Supported Models
 
-#### Dataset Configuration
+| Model | `model_type` | Best For | Requirements |
+|-------|-------------|----------|--------------|
+| **Qwen Image** | `qwen` | Image generation | - |
+| **Flux** | `flux` | High-quality images | HuggingFace token |
+| **SDXL** | `sdxl` | Stable Diffusion XL | - |
+| **Wan 1.3B** | `wan13` | Fast video generation | - |
+| **Wan 14B T2V** | `wan14b_t2v` | High-quality text-to-video | - |
+| **Wan 14B I2V** | `wan14b_i2v` | Image-to-video | - |
+| **Z Image Turbo** | `z_image_turbo` | Fast image generation | - |
 
+---
+
+## Complete API Reference
+
+### Request Structure
+
+```json
+{
+  "input": {
+    "model_type": "string (required)",
+    "dataset": { ... },
+    "training": { ... },
+    "api_keys": { ... },
+    "output": { ... }
+  }
+}
+```
+
+### Dataset Configuration
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string | Yes | - | `images`, `videos`, `both`, or `precaptioned` |
+| `images_url` | string | For images | - | URL to zip file containing images |
+| `videos_url` | string | For videos | - | URL to zip file containing videos |
+| `trigger_word` | string | No | - | Word to prepend to all captions (e.g., "ohwx person") |
+| `image_repeats` | int | No | 1 | Times to repeat image dataset per epoch |
+| `video_repeats` | int | No | 5 | Times to repeat video dataset per epoch |
+
+**Dataset Types Explained:**
+- `precaptioned`: Your zip contains `.txt` files alongside media files (recommended)
+- `images`: Auto-caption images using JoyCaption
+- `videos`: Auto-caption videos using Gemini API (requires `gemini_api_key`)
+- `both`: Auto-caption both images and videos
+
+### Training Configuration
+
+Every diffusion-pipe parameter is supported. Here are the most common ones:
+
+#### Basic Training
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dataset.images_url` | string | - | URL to download image dataset (zip file) |
-| `dataset.videos_url` | string | - | URL to download video dataset (zip file) |
-| `dataset.trigger_word` | string | - | Trigger word to prepend to captions |
-| `dataset.image_repeats` | int | 1 | Dataset repeats per epoch for images |
-| `dataset.video_repeats` | int | 5 | Dataset repeats per epoch for videos |
+| `epochs` | int | 100 | Total training epochs |
+| `learning_rate` | float | 2e-5 | Optimizer learning rate |
+| `batch_size` | int | 1 | Micro batch size per GPU |
+| `gradient_accumulation_steps` | int | 4 | Steps before weight update |
+| `gradient_clipping` | float | 1.0 | Max gradient norm |
+| `warmup_steps` | int | 100 | LR warmup steps |
 
-#### Training Configuration
-
-The training section supports **all parameters** from diffusion-pipe's TOML config. Any parameter you pass will be included in the generated config. Here are the common ones:
-
-**Basic Training**
+#### LoRA Settings
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `training.epochs` | int | 100 | Number of training epochs |
-| `training.learning_rate` | float | 2e-5 | Learning rate |
-| `training.batch_size` | int | 1 | Micro batch size per GPU |
-| `training.gradient_accumulation_steps` | int | 4 | Gradient accumulation steps |
-| `training.gradient_clipping` | float | 1.0 | Gradient norm clipping |
-| `training.warmup_steps` | int | 100 | Learning rate warmup steps |
+| `lora_rank` | int | 32 | Rank of LoRA matrices (4, 8, 16, 32, 64, 128) |
+| `lora_dtype` | string | "bfloat16" | LoRA weight precision |
 
-**LoRA Settings**
+#### Checkpointing
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `training.lora_rank` | int | 32 | LoRA adapter rank (4, 8, 16, 32, 64, 128) |
-| `training.lora_dtype` | string | bfloat16 | LoRA weight data type |
+| `save_every_n_epochs` | int | 10 | Save model every N epochs |
+| `checkpoint_every_n_minutes` | int | 120 | Save training state for resume |
+| `save_dtype` | string | "bfloat16" | Saved model precision |
 
-**Saving & Checkpoints**
+#### Optimizer (AdamW)
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `training.save_every_n_epochs` | int | 10 | Save model every N epochs |
-| `training.checkpoint_every_n_minutes` | int | 120 | Save training state for resume |
-| `training.save_dtype` | string | bfloat16 | Data type for saved weights |
+| `optimizer_type` | string | "adamw_optimi" | Optimizer class |
+| `optimizer_betas` | array | [0.9, 0.99] | Adam beta parameters |
+| `optimizer_weight_decay` | float | 0.01 | L2 regularization |
+| `optimizer_eps` | float | 1e-8 | Numerical stability |
 
-**Optimizer (AdamW)**
+#### Video-Specific
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `training.optimizer_type` | string | adamw_optimi | Optimizer type |
-| `training.optimizer_betas` | array | [0.9, 0.99] | Adam beta parameters |
-| `training.optimizer_weight_decay` | float | 0.01 | Weight decay |
-| `training.optimizer_eps` | float | 1e-8 | Adam epsilon |
+| `video_clip_mode` | string | "single_middle" | How to extract clips |
+| `frame_buckets` | array | [1, 33] | Frame count buckets |
 
-**Video Training**
+#### Other
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `training.video_clip_mode` | string | single_middle | Video clip extraction mode |
-| `training.frame_buckets` | array | [1, 33] | Frame buckets for video training |
+| `resolution` | int | 1024 | Training resolution |
+| `activation_checkpointing` | bool | true | Save VRAM |
+| `caching_batch_size` | int | 1 | Latent caching batch size |
+| `eval_every_n_epochs` | int | 1 | Evaluation frequency |
+| `eval_before_first_step` | bool | true | Eval at start |
 
-**Other**
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `training.resolution` | int | 1024 | Training resolution (512, 768, 1024) |
-| `training.activation_checkpointing` | bool | true | Save VRAM with activation checkpointing |
-| `training.caching_batch_size` | int | 1 | Batch size for latent caching |
+**Custom Parameters**: Any field not listed above will be passed directly to the TOML config. This means you can use ANY parameter that diffusion-pipe supports.
 
-**Custom Parameters**: Any additional parameters you include in `training` will be passed through to the TOML config.
+### API Keys
 
-#### API Keys
+| Field | Required For | Description |
+|-------|-------------|-------------|
+| `huggingface_token` | Flux model | HuggingFace access token |
+| `gemini_api_key` | Video captioning | Google Gemini API key |
 
-| Field | Description |
-|-------|-------------|
-| `api_keys.huggingface_token` | Required for Flux model |
-| `api_keys.gemini_api_key` | Required for video captioning (when type is `videos` or `both`) |
+### Output Configuration
 
-#### Output Configuration (Download Link Generation)
-
-The endpoint automatically generates a download link for your trained LoRA. Multiple strategies are supported:
-
-| Method | Format | Max Size | Retention | Setup Required |
-|--------|--------|----------|-----------|----------------|
-| `huggingface` (recommended) | Raw .safetensors | Unlimited | Permanent | HF token |
-| `s3` | Zip archive | Unlimited | 7 days | Your S3 credentials |
-| `litterbox` | Zip archive | 1GB | 72 hours | None |
-| `transfer_sh` | Zip archive | 10GB | 14 days | None |
-| `auto` (default) | Varies | Varies | Varies | Tries HF → litterbox → transfer.sh |
-
-**Recommended: Upload to HuggingFace Hub (Raw Files)**
+#### HuggingFace (Recommended)
 ```json
 {
   "output": {
     "method": "huggingface",
     "huggingface": {
       "token": "hf_YOUR_WRITE_TOKEN",
-      "repo_id": "your-username/my-lora",
+      "repo_id": "username/repo-name",
       "private": true
     }
   }
 }
 ```
 
-This uploads raw `.safetensors` files directly to HuggingFace - no zipping! Perfect for sharing or using your LoRA.
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `token` | Yes | - | HuggingFace token with write access |
+| `repo_id` | No | Auto-generated | Repository name (e.g., "user/my-lora") |
+| `private` | No | true | Make repository private |
 
-**Simple Usage (No Setup Required):**
+**Benefits:**
+- Raw `.safetensors` files (not zipped)
+- Permanent storage
+- Progress tracking via UPDATES folder
+- Direct download URLs
+
+#### S3-Compatible Storage
+```json
+{
+  "output": {
+    "method": "s3",
+    "s3": {
+      "endpoint_url": "https://account.r2.cloudflarestorage.com",
+      "bucket": "my-bucket",
+      "region": "auto",
+      "access_key": "YOUR_ACCESS_KEY",
+      "secret_key": "YOUR_SECRET_KEY",
+      "key_prefix": "lora-outputs"
+    }
+  }
+}
+```
+
+#### Auto (No Setup Required)
 ```json
 {
   "output": {
@@ -172,50 +289,127 @@ This uploads raw `.safetensors` files directly to HuggingFace - no zipping! Perf
   }
 }
 ```
+Tries: HuggingFace (if configured) → litterbox → transfer.sh → file.io
 
-**With Your Own S3 (AWS S3, Cloudflare R2, etc.):**
+---
+
+## Progress Tracking (HuggingFace)
+
+When using HuggingFace output, progress is written to `UPDATES/` as JSON files:
+
+### File Naming
+```
+UPDATES/{number}_{timestamp}_{status}.json
+```
+Example: `0003_20241214_143052_TRAINING.json`
+
+### JSON Structure
 ```json
 {
-  "output": {
-    "method": "s3",
-    "s3": {
-      "endpoint_url": "https://your-account.r2.cloudflarestorage.com",
-      "bucket": "my-lora-outputs",
-      "region": "auto",
-      "access_key": "YOUR_ACCESS_KEY",
-      "secret_key": "YOUR_SECRET_KEY",
-      "key_prefix": "diffusion-pipe-outputs"
-    }
+  "status": "TRAINING",
+  "timestamp": "2024-12-14T14:30:52.123456+00:00",
+  "job_id": "abc123-def456",
+  "update_number": 3,
+  "repo_id": "username/my-lora",
+  "data": {
+    "message": "Starting Qwen Image LoRA training",
+    "epochs": 100,
+    "lora_rank": 32
   }
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `output.method` | No | Upload method: `huggingface`, `s3`, `litterbox`, `transfer_sh`, or `auto` |
-| `output.huggingface.token` | For HF | HuggingFace token with write access |
-| `output.huggingface.repo_id` | No | Repository ID (auto-generated if not provided) |
-| `output.huggingface.private` | No | Whether repo should be private (default: true) |
-| `output.s3.endpoint_url` | For R2/MinIO | S3 endpoint (optional for AWS S3) |
-| `output.s3.bucket` | For S3 | Bucket name |
-| `output.s3.region` | For S3 | AWS region or 'auto' for R2 |
-| `output.s3.access_key` | For S3 | Access key ID |
-| `output.s3.secret_key` | For S3 | Secret access key |
+### Status Values
 
-### Response Format
+| Status | Meaning |
+|--------|---------|
+| `INITIALIZED` | Repository created, job starting |
+| `STARTING` | Validating input, preparing |
+| `DOWNLOADING` | Downloading dataset |
+| `CAPTIONING` | Running auto-captioning |
+| `MODEL_DOWNLOAD` | Downloading base model |
+| `TRAINING` | Training in progress |
+| `TRAINING_COMPLETE` | Training finished |
+| `UPLOADING` | Uploading results |
+| `COMPLETE` | All done - includes download URLs |
+| `ERROR` | Something failed |
 
-**When using HuggingFace (recommended):**
+### Final COMPLETE Update
+```json
+{
+  "status": "COMPLETE",
+  "timestamp": "2024-12-14T15:45:00.000000+00:00",
+  "job_id": "abc123-def456",
+  "update_number": 8,
+  "repo_id": "username/my-lora",
+  "data": {
+    "message": "Training completed successfully!",
+    "repository_url": "https://huggingface.co/username/my-lora",
+    "direct_download_url": "https://huggingface.co/username/my-lora/resolve/main/adapter_model.safetensors?download=true",
+    "instructions": "Use the direct_download_url to download your trained LoRA safetensors file.",
+    "files_uploaded": ["adapter_model.safetensors", "adapter_config.json"],
+    "safetensors_files": ["adapter_model.safetensors"]
+  }
+}
+```
+
+### Building an App with Progress Tracking
+
+```python
+from huggingface_hub import HfApi
+import json
+import time
+
+def monitor_training(repo_id: str, token: str):
+    api = HfApi(token=token)
+    seen_updates = set()
+
+    while True:
+        # List files in UPDATES folder
+        files = api.list_repo_files(repo_id, repo_type="model")
+        update_files = sorted([f for f in files if f.startswith("UPDATES/")])
+
+        # Process new updates
+        for update_file in update_files:
+            if update_file not in seen_updates:
+                seen_updates.add(update_file)
+
+                # Download and parse
+                content = api.hf_hub_download(repo_id, update_file, repo_type="model")
+                with open(content) as f:
+                    update = json.load(f)
+
+                print(f"[{update['status']}] {update['data'].get('message', '')}")
+
+                # Check if complete
+                if update['status'] == 'COMPLETE':
+                    return update['data']['direct_download_url']
+                elif update['status'] == 'ERROR':
+                    raise Exception(update['data'].get('error', 'Training failed'))
+
+        time.sleep(30)  # Poll every 30 seconds
+
+# Usage
+download_url = monitor_training("username/my-lora", "hf_token")
+print(f"Download your LoRA: {download_url}")
+```
+
+---
+
+## Response Format
+
+### Success Response
 ```json
 {
   "status": "success",
-  "job_id": "abc123",
+  "job_id": "abc123-def456",
   "model_type": "qwen",
   "model_name": "Qwen Image",
-  "epochs_completed": 2,
-  "latest_epoch": "epoch2",
+  "epochs_completed": 100,
+  "latest_epoch": "epoch100",
   "output": {
-    "download_url": "https://huggingface.co/username/my-lora/resolve/main/adapter_model.safetensors?download=true",
-    "safetensors_url": "https://huggingface.co/username/my-lora/resolve/main/adapter_model.safetensors?download=true",
+    "download_url": "https://huggingface.co/.../adapter_model.safetensors?download=true",
+    "safetensors_url": "https://huggingface.co/.../adapter_model.safetensors?download=true",
     "repo_url": "https://huggingface.co/username/my-lora",
     "download_method": "huggingface",
     "expires_in_days": null,
@@ -224,126 +418,232 @@ This uploads raw `.safetensors` files directly to HuggingFace - no zipping! Perf
 }
 ```
 
-**When using other methods (S3, litterbox, etc.):**
+### Error Response
 ```json
 {
-  "status": "success",
-  "job_id": "abc123",
-  "model_type": "wan14b_t2v",
-  "model_name": "Wan 14B T2V",
-  "epochs_completed": 10,
-  "latest_epoch": "epoch100",
-  "output": {
-    "download_url": "https://litter.catbox.moe/abc123.zip",
-    "download_method": "litterbox",
-    "expires_in_days": 3,
-    "archive_size_mb": 256.5,
-    "network_volume_path": "/runpod-volume/diffusion_pipe_working_folder/training_outputs/abc123/epoch100"
-  }
+  "status": "failed",
+  "error": "Description of what went wrong"
 }
 ```
 
-The `download_url` is a direct link you can use to download your trained LoRA. Just click it or use `curl`/`wget`.
+---
 
-**Progress Tracking via HuggingFace**: When using HuggingFace output, progress updates are written to the `UPDATES/` folder in your repo. This persists even after RunPod purges job results, so you can always check the status and get the download link from your HuggingFace repository.
+## Examples
 
-### Example Usage with curl
-
+### Train Qwen Image LoRA (Simplest)
 ```bash
-# Using the async /run endpoint (recommended for long training jobs)
-curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/run \
+curl -X POST "https://api.runpod.ai/v2/ENDPOINT_ID/run" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY" \
+  -H "Authorization: Bearer RUNPOD_KEY" \
+  -d '{
+    "input": {
+      "model_type": "qwen",
+      "dataset": {
+        "type": "precaptioned",
+        "images_url": "https://example.com/images.zip"
+      },
+      "output": {
+        "method": "huggingface",
+        "huggingface": {
+          "token": "hf_xxx",
+          "repo_id": "user/qwen-lora"
+        }
+      }
+    }
+  }'
+```
+
+### Train Wan 14B Video LoRA with Custom Settings
+```bash
+curl -X POST "https://api.runpod.ai/v2/ENDPOINT_ID/run" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer RUNPOD_KEY" \
   -d '{
     "input": {
       "model_type": "wan14b_t2v",
       "dataset": {
         "type": "precaptioned",
-        "videos_url": "https://my-bucket.s3.amazonaws.com/training_videos.zip"
+        "videos_url": "https://example.com/videos.zip",
+        "video_repeats": 10
       },
       "training": {
-        "epochs": 50,
-        "lora_rank": 32
+        "epochs": 200,
+        "learning_rate": 1e-5,
+        "lora_rank": 64,
+        "save_every_n_epochs": 25,
+        "gradient_accumulation_steps": 8,
+        "video_clip_mode": "multiple_overlapping",
+        "frame_buckets": [1, 17, 33, 49]
+      },
+      "output": {
+        "method": "huggingface",
+        "huggingface": {
+          "token": "hf_xxx",
+          "repo_id": "user/wan-video-lora",
+          "private": false
+        }
       }
     }
   }'
-
-# Response:
-# {"id": "job-abc123", "status": "IN_QUEUE"}
-
-# Check status
-curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/job-abc123 \
-  -H "Authorization: Bearer YOUR_RUNPOD_API_KEY"
 ```
+
+### Train Flux with Auto-Captioning
+```bash
+curl -X POST "https://api.runpod.ai/v2/ENDPOINT_ID/run" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer RUNPOD_KEY" \
+  -d '{
+    "input": {
+      "model_type": "flux",
+      "dataset": {
+        "type": "images",
+        "images_url": "https://example.com/raw_images.zip",
+        "trigger_word": "ohwx person"
+      },
+      "training": {
+        "epochs": 80,
+        "lora_rank": 32
+      },
+      "api_keys": {
+        "huggingface_token": "hf_xxx_for_flux_download"
+      },
+      "output": {
+        "method": "huggingface",
+        "huggingface": {
+          "token": "hf_xxx_for_upload",
+          "repo_id": "user/flux-lora"
+        }
+      }
+    }
+  }'
+```
+
+---
 
 ## Dataset Preparation
 
-### For Images
+### Image Dataset Structure
+```
+dataset.zip
+├── photo1.jpg
+├── photo1.txt          # "a portrait photo of ohwx person"
+├── photo2.png
+├── photo2.txt          # "ohwx person walking in a park"
+├── subfolder/          # Subfolders are flattened automatically
+│   ├── photo3.webp
+│   └── photo3.txt
+└── ...
+```
 
-1. Create a zip file containing your images
-2. Each image should have a corresponding `.txt` caption file (same name, `.txt` extension)
-3. If using `type: "images"` without precaptioned data, the system will auto-caption using JoyCaption
+**Supported formats:** JPG, JPEG, PNG, WebP, BMP, TIFF
 
-### For Videos
+### Video Dataset Structure
+```
+dataset.zip
+├── clip1.mp4
+├── clip1.txt           # "ohwx person dancing in a studio"
+├── clip2.mov
+├── clip2.txt           # "close-up of ohwx person talking"
+└── ...
+```
 
-1. Create a zip file containing your videos (MP4, AVI, MOV, MKV, WebM)
-2. Each video should have a corresponding `.txt` caption file
-3. If using `type: "videos"` without precaptioned data, the system will auto-caption using Gemini API
+**Supported formats:** MP4, AVI, MOV, MKV, WebM
 
-### Precaptioned Data
+### Caption File Format
 
-If your dataset already has captions, use `type: "precaptioned"` to skip the captioning step.
+Each caption should be on a single line:
+```
+a professional photo of ohwx person wearing a blue shirt, studio lighting, white background
+```
 
-## Network Volume
+For trigger words, you can either:
+1. Include them in every caption manually
+2. Use the `trigger_word` parameter to auto-prepend
 
-For faster model loading and to persist trained LoRAs:
+### Tips for Good Results
 
+1. **Consistent quality**: Use similar resolution/quality across images
+2. **Varied poses/angles**: Include diversity in your dataset
+3. **Good captions**: Be specific and consistent with style
+4. **Right amount**: 10-50 images is usually enough for faces/characters
+5. **No macOS artifacts**: The system auto-removes `__MACOSX` and `.DS_Store`
+
+---
+
+## Network Volume (Recommended)
+
+Using a Network Volume dramatically reduces cold start time by caching models.
+
+### Setup
 1. Create a Network Volume in RunPod
 2. Attach it to your serverless endpoint
-3. Pre-download models to `/runpod-volume/diffusion_pipe_working_folder/models/`
+3. First run will download models to `/runpod-volume/diffusion_pipe_working_folder/models/`
+4. Subsequent runs reuse cached models
 
-This significantly reduces cold start time for large models.
+### Pre-downloading Models
 
-## Deployment on RunPod
-
-1. Go to RunPod Serverless console
-2. Create a new endpoint
-3. Select "Import from Docker Registry"
-4. Enter your image: `YOUR_USERNAME/diffusion-pipe-serverless:v1.0`
-5. Configure GPU type (H100 recommended for large models)
-6. Optionally attach a Network Volume
-7. Deploy
-
-## Local Testing
+To avoid download time during training, you can pre-populate models:
 
 ```bash
-# Build locally
-docker build -t diffusion-pipe-serverless .
-
-# Run with GPU
-docker run --gpus all -it diffusion-pipe-serverless
-
-# Test with the test_input.json
-# (Inside the container)
-python3 /serverless/handler.py
+# SSH into a pod with the network volume attached
+# Models will be stored at:
+# /runpod-volume/diffusion_pipe_working_folder/models/
 ```
+
+---
 
 ## Troubleshooting
 
-### CUDA Errors
-- Ensure you're using CUDA 12.8 compatible GPUs
-- H100/H200 GPUs are recommended
+### "Model type X is not implemented"
+- Check that `model_type` is exactly one of: `flux`, `sdxl`, `wan13`, `wan14b_t2v`, `wan14b_i2v`, `qwen`, `z_image_turbo`
 
-### Model Download Issues
-- Check your HuggingFace token (for Flux)
-- Ensure network volume has sufficient space
+### "No images/videos found in directory"
+- Ensure your zip file contains actual media files
+- Check that files aren't nested too deeply in folders
+- macOS users: Create zip via terminal (`zip -r`) not Finder
 
-### Captioning Errors
-- Verify Gemini API key is valid (for video captioning)
-- Check that images/videos are in supported formats
+### "Failed to download dataset"
+- Verify your URL is publicly accessible
+- Test with `curl YOUR_URL` locally first
+
+### "HuggingFace upload failed"
+- Ensure your token has **write** access
+- Check token at https://huggingface.co/settings/tokens
+
+### Training is slow
+- Use H100 or A100 GPUs for best performance
+- Attach a Network Volume to cache models
+- Reduce `epochs` for testing
+
+### Out of memory
+- Reduce `batch_size` to 1
+- Enable `activation_checkpointing` (default: true)
+- Use lower `lora_rank` (16 or 32)
+
+---
+
+## Pricing Estimate
+
+RunPod charges per-second for GPU time. Rough estimates:
+
+| Model | GPU | ~Time for 100 epochs | ~Cost |
+|-------|-----|---------------------|-------|
+| Qwen Image | A100 80GB | 10-20 min | $0.50-1.00 |
+| Flux | A100 80GB | 15-30 min | $0.75-1.50 |
+| Wan 14B | H100 | 30-60 min | $2.00-4.00 |
+
+Actual costs depend on dataset size, resolution, and configuration.
+
+---
 
 ## Credits
 
-- Original [diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) by tdrussell
-- RunPod pod template by [Hearmeman24](https://github.com/Hearmeman24/runpod-diffusion_pipe)
+- [diffusion-pipe](https://github.com/tdrussell/diffusion-pipe) by tdrussell - Original training framework
+- [runpod-diffusion_pipe](https://github.com/Hearmeman24/runpod-diffusion_pipe) by Hearmeman24 - RunPod pod template
 - Serverless adaptation for API-based training
+
+---
+
+## License
+
+This project adapts open-source tools for serverless deployment. Please respect the licenses of the underlying projects.
