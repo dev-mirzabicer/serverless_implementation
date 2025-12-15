@@ -94,7 +94,18 @@
           "type": "string",
           "default": "bfloat16",
           "enum": ["bfloat16", "float16", "float32"],
-          "description": "Data type for LoRA weights"
+          "description": "Data type for LoRA adapter weights ([adapter] dtype)"
+        },
+        "model_dtype": {
+          "type": "string",
+          "default": "bfloat16",
+          "enum": ["bfloat16", "float16", "float32"],
+          "description": "Data type for the base model ([model] dtype)"
+        },
+        "transformer_dtype": {
+          "type": "string",
+          "enum": ["bfloat16", "float16", "float32", "float8"],
+          "description": "Data type for transformer specifically ([model] transformer_dtype). If not set, uses model_dtype. Use 'float8' to reduce VRAM usage during LoRA training."
         },
         "save_every_n_epochs": {
           "type": "integer",

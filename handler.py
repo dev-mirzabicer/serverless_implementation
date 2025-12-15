@@ -452,9 +452,12 @@ def generate_model_toml(
         "caching_batch_size": 1,
         "steps_per_print": 1,
         "video_clip_mode": "single_middle",
+        # Model dtype settings
+        "model_dtype": "bfloat16",          # [model] dtype
+        "transformer_dtype": None,           # [model] transformer_dtype (None = not set, use model_dtype)
         # Adapter (LoRA) settings
         "lora_rank": 32,
-        "lora_dtype": "bfloat16",
+        "lora_dtype": "bfloat16",            # [adapter] dtype
         # Optimizer settings (adamw_optimi)
         "optimizer_type": "adamw_optimi",
         "optimizer_betas": [0.9, 0.99],
@@ -533,6 +536,8 @@ video_clip_mode = {to_toml_value(config.get('video_clip_mode', 'single_middle'))
         'save_every_n_epochs', 'checkpoint_every_n_minutes',
         'activation_checkpointing', 'partition_method', 'save_dtype',
         'caching_batch_size', 'steps_per_print', 'video_clip_mode',
+        # Model dtype settings
+        'model_dtype', 'transformer_dtype',
         # Adapter settings
         'lora_rank', 'lora_dtype',
         # Optimizer settings
@@ -549,31 +554,41 @@ video_clip_mode = {to_toml_value(config.get('video_clip_mode', 'single_middle'))
 
     content += "\n[model]\n"
 
+    # Get dtype settings from config
+    model_dtype = config.get('model_dtype', 'bfloat16')
+    transformer_dtype = config.get('transformer_dtype')  # None by default
+
+    # Helper to add transformer_dtype line only if set
+    def get_transformer_dtype_line(default_value=None):
+        """Return transformer_dtype line if configured, or default if provided."""
+        dtype_val = transformer_dtype if transformer_dtype else default_value
+        if dtype_val:
+            return f"transformer_dtype = {to_toml_value(dtype_val)}\n"
+        return ""
+
     # Model-specific configuration
     if model_type == "flux":
         content += f"""type = 'flux'
 diffusers_path = '{model_path}'
-dtype = 'bfloat16'
-transformer_dtype = 'float8'
-flux_shift = true
+dtype = {to_toml_value(model_dtype)}
+{get_transformer_dtype_line('float8')}flux_shift = true
 """
     elif model_type == "sdxl":
         content += f"""type = 'sdxl'
 ckpt_path = '{model_path}'
-dtype = 'bfloat16'
-"""
+dtype = {to_toml_value(model_dtype)}
+{get_transformer_dtype_line()}"""
     elif model_type in ["wan13", "wan14b_t2v", "wan14b_i2v"]:
         content += f"""type = 'wan'
 ckpt_path = '{model_path}'
-dtype = 'bfloat16'
-timestep_sample_method = 'logit_normal'
+dtype = {to_toml_value(model_dtype)}
+{get_transformer_dtype_line()}timestep_sample_method = 'logit_normal'
 """
     elif model_type == "qwen":
         content += f"""type = 'qwen_image'
 diffusers_path = '{model_path}'
-dtype = 'bfloat16'
-transformer_dtype = 'float8'
-timestep_sample_method = 'logit_normal'
+dtype = {to_toml_value(model_dtype)}
+{get_transformer_dtype_line('float8')}timestep_sample_method = 'logit_normal'
 """
     elif model_type == "z_image_turbo":
         content += f"""type = 'z_image'
@@ -583,8 +598,8 @@ text_encoders = [
     {{path = '{model_path}/qwen_3_4b.safetensors', type = 'lumina2'}}
 ]
 merge_adapters = ['{model_path}/zimage_turbo_training_adapter_v2.safetensors']
-dtype = 'bfloat16'
-"""
+dtype = {to_toml_value(model_dtype)}
+{get_transformer_dtype_line()}"""
 
     # Adapter configuration
     content += f"""
